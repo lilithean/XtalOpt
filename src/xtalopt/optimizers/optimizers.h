@@ -17,6 +17,7 @@
 #define XTALOPT_OPTIMIZERS_H
 
 #include <xtalopt/optimizers/castep.h>
+#include <xtalopt/optimizers/generic.h>
 #include <xtalopt/optimizers/gulp.h>
 #include <xtalopt/optimizers/pwscf.h>
 #include <xtalopt/optimizers/siesta.h>

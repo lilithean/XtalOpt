@@ -11,7 +11,7 @@
    </rect>
   </property>
   <property name="windowTitle">
-   <string>Generate Theoretical XRD Pattern Options</string>
+   <string>Generate Simulated XRD Pattern Options</string>
   </property>
   <property name="toolTip">
    <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;The broadening of the peak at the base (in degrees).&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
@@ -151,6 +151,12 @@
    </item>
   </layout>
  </widget>
+ <tabstops>
+  <tabstop>spin_wavelength</tabstop>
+  <tabstop>spin_peakwidth</tabstop>
+  <tabstop>spin_numpoints</tabstop>
+  <tabstop>spin_max2theta</tabstop>
+ </tabstops>
  <resources/>
  <connections>
   <connection>

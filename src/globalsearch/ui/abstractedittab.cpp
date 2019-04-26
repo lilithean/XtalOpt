@@ -27,6 +27,7 @@
 #include <QLineEdit>
 #include <QListWidget>
 #include <QPushButton>
+#include <QVBoxLayout>
 #include <QTextEdit>
 
 #include <QDebug>
@@ -208,8 +209,19 @@ void AbstractEditTab::lockGUI()
 
 void AbstractEditTab::showHelp()
 {
-  QMessageBox::information(m_dialog, "Template Help",
-                           m_opt->getTemplateKeywordHelp());
+  QDialog dialog(m_dialog);
+
+  QVBoxLayout vLayout(&dialog);
+  dialog.setLayout(&vLayout);
+
+  QTextEdit textEdit(&dialog);
+  textEdit.setPlainText(m_opt->getTemplateKeywordHelp());
+  textEdit.setReadOnly(true);
+
+  vLayout.addWidget(&textEdit);
+
+  dialog.resize(QSize(700, 600));
+  dialog.exec();
 }
 
 void AbstractEditTab::updateQueueInterface()
@@ -221,8 +233,6 @@ void AbstractEditTab::updateQueueInterface()
 
   unsigned int newQiIndex = ui_combo_queueInterfaces->currentIndex();
 
-  qDebug() << "newQiIndex is" << newQiIndex;
-
   Q_ASSERT(newQiIndex <= m_queueInterfaces.size() - 1);
 
   QueueInterface* qi = m_opt->queueInterface(getCurrentOptStep());
@@ -233,7 +243,6 @@ void AbstractEditTab::updateQueueInterface()
     ui_push_queueInterfaceConfig->setEnabled(false);
   }
 
-  qDebug() << "Emitting queue interface changed";
   emit queueInterfaceChanged(getCurrentOptStep(),
                              m_queueInterfaces[newQiIndex].toStdString());
 }
@@ -381,7 +390,9 @@ void AbstractEditTab::saveCurrentTemplate()
   m_opt->setTemplate(optStepIndex, templateName.toStdString(),
                      text.toStdString());
 
+  bool wasBlocked = ui_edit_edit->blockSignals(true);
   ui_edit_edit->setCurrentFont(QFont("Courier"));
+  ui_edit_edit->blockSignals(wasBlocked);
 }
 
 void AbstractEditTab::updateUserValues()

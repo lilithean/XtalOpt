@@ -589,8 +589,8 @@ bool XtalOpt::save(QString filename, bool notify)
 
   // Hardness settings
   settings->setValue("opt/calculateHardness", m_calculateHardness.load());
-  settings->setValue("opt/useHardnessFitnessFunction",
-                     m_useHardnessFitnessFunction);
+  settings->setValue("opt/hardnessFitnessWeight",
+                     m_hardnessFitnessWeight.load());
 
   return true;
 }
@@ -609,6 +609,9 @@ bool XtalOpt::writeEditSettings(const QString& filename)
   settings->setValue("remote/queueRefreshInterval", queueRefreshInterval());
   settings->setValue("remote/cleanRemoteOnStop", cleanRemoteOnStop());
   settings->setValue("remote/rempath", rempath);
+  settings->setValue("remote/cancelJobAfterTime", cancelJobAfterTime());
+  settings->setValue("remote/hoursForCancelJobAfterTime",
+                     hoursForCancelJobAfterTime());
 
   // This will also write the number of opt steps
   writeAllTemplatesToSettings(filename.toStdString());
@@ -686,6 +689,11 @@ bool XtalOpt::readEditSettings(const QString& filename)
 
   setCleanRemoteOnStop(
     settings->value("remote/cleanRemoteOnStop", "false").toBool());
+
+  m_cancelJobAfterTime =
+    settings->value("remote/cancelJobAfterTime", "false").toBool();
+  m_hoursForCancelJobAfterTime =
+    settings->value("remote/hoursForCancelJobAfterTime", "100.0").toDouble();
 
   // Old load instructions
   if (loadedVersion < 3) {
@@ -920,7 +928,8 @@ bool XtalOpt::readEditSettings(const QString& filename)
 bool XtalOpt::readSettings(const QString& filename)
 {
   // Some sections, we only want to load if we are loading a state file
-  bool isStateFile = filename.endsWith(".state");
+  bool isStateFile = filename.endsWith(".state") ||
+                     filename.endsWith(".state.old");
 
   SETTINGS(filename);
 
@@ -1073,9 +1082,6 @@ bool XtalOpt::readSettings(const QString& filename)
 
   settings->endGroup();
 
-  using_interatomicDistanceLimit =
-    settings->value("using/shortestInteratomicDistance", false).toBool();
-
   // We have a separate function for reading the edit settings because
   // the edit tab may need to call it
   if (!readEditSettings(filename))
@@ -1136,8 +1142,8 @@ bool XtalOpt::readSettings(const QString& filename)
   // Hardness stuff
   m_calculateHardness =
     settings->value("opt/calculateHardness", false).toBool();
-  m_useHardnessFitnessFunction =
-    settings->value("opt/useHardnessFitnessFunction", false).toBool();
+  m_hardnessFitnessWeight =
+    settings->value("opt/hardnessFitnessWeight", 0.0).toDouble();
 
   settings->endGroup();
 
@@ -1193,13 +1199,24 @@ Structure* XtalOpt::replaceWithRandom(Structure* s, const QString& reason)
   id = s->getIDNumber();
   // Generate/Check new xtal
   Xtal* xtal = 0;
+  uint spg = 0;
   while (!checkXtal(xtal)) {
     if (xtal) {
       delete xtal;
       xtal = 0;
     }
 
-    xtal = generateRandomXtal(generation, id, FU);
+    if (using_randSpg) {
+      do {
+        // Randomly select a possible spg
+        spg = pickRandomSpgFromPossibleOnes();
+      }
+      while (!RandSpg::isSpgPossible(spg, getStdVecOfAtoms(FU)));
+
+      xtal = randSpgXtal(generation, id, FU, spg);
+    } else {
+      xtal = generateRandomXtal(generation, id, FU);
+    }
   }
 
   // Copy info over
@@ -1210,7 +1227,14 @@ Structure* XtalOpt::replaceWithRandom(Structure* s, const QString& reason)
   oldXtal->resetEnthalpy();
   oldXtal->setPV(0);
   oldXtal->setCurrentOptStep(0);
-  QString parents = "Randomly generated";
+  QString parents;
+  if (using_randSpg) {
+    QString HM_spg = Xtal::getHMName(spg);
+    parents = tr("RandSpg Init: %1 (%2)").arg(spg).arg(HM_spg);
+  }
+  else {
+    parents = "Randomly generated";
+  }
   if (!reason.isEmpty())
     parents += " (" + reason + ")";
   oldXtal->setParents(parents);
@@ -1346,7 +1370,7 @@ Xtal* XtalOpt::randSpgXtal(uint generation, uint id, uint FU, uint spg,
   // Set up xtal data
   xtal->setGeneration(generation);
   xtal->setIDNumber(id);
-  xtal->setParents(tr("Spg Init: %1 (%2)").arg(spg).arg(HM_spg));
+  xtal->setParents(tr("RandSpg Init: %1 (%2)").arg(spg).arg(HM_spg));
   return xtal;
 }
 
@@ -2531,8 +2555,9 @@ Xtal* XtalOpt::H_getMutatedXtal(QList<Structure*>& structures, int FU,
           // If FU crossovers have been enabled, generate a new breeding pool
           // that includes multiple different formula units then run the
           // alternative crossover function
+          // Only perform FU crossover if there is more than one formula unit
           bool enoughStructures = true;
-          if (using_FU_crossovers) {
+          if (using_FU_crossovers && formulaUnitsList.size() > 1) {
             // Get all optimized structures
             QList<Structure*> tempStructures =
               m_queue->getAllOptimizedStructures();
@@ -2560,11 +2585,15 @@ Xtal* XtalOpt::H_getMutatedXtal(QList<Structure*>& structures, int FU,
               xtal = XtalOptGenetic::FUcrossover(
                 xtal1, xtal2, cross_minimumContribution, percent1, percent2,
                 formulaUnitsList, this->comp);
+
+              if (!xtal)
+                continue;
             }
           }
 
           // Perform a regular crossover instead!
-          if (!using_FU_crossovers || !enoughStructures) {
+          if (!using_FU_crossovers || !enoughStructures ||
+              formulaUnitsList.size() <= 1) {
             xtal1 = selectedXtal;
             xtal2 = selectXtalFromProbabilityList(structures,
                                                   xtal1->getFormulaUnits());
@@ -2586,10 +2615,12 @@ Xtal* XtalOpt::H_getMutatedXtal(QList<Structure*>& structures, int FU,
 
           // We will set the parent xtal of this xtal to be
           // the parent that contributed the most
-          if (percent1 >= 50.0)
-            xtal->setParentStructure(xtal1);
-          else
-            xtal->setParentStructure(xtal2);
+          if (xtal) {
+            if (percent1 >= 50.0)
+              xtal->setParentStructure(xtal1);
+            else
+              xtal->setParentStructure(xtal2);
+          }
 
           // Determine generation number
           gen = (gen1 >= gen2) ? gen1 + 1 : gen2 + 1;
@@ -2627,7 +2658,7 @@ Xtal* XtalOpt::H_getMutatedXtal(QList<Structure*>& structures, int FU,
           uint id1 = selectedXtal->getIDNumber();
 
           // If it's a mitosis mutation, the parent xtal is already set
-          if (!mitosisMutation)
+          if (!mitosisMutation && xtal)
             xtal->setParentStructure(selectedXtal);
           selectedXtal->lock().unlock();
 
@@ -2667,7 +2698,7 @@ Xtal* XtalOpt::H_getMutatedXtal(QList<Structure*>& structures, int FU,
           uint id1 = selectedXtal->getIDNumber();
 
           // If it's a mitosis mutation, the parent xtal is already set
-          if (!mitosisMutation)
+          if (!mitosisMutation && xtal)
             xtal->setParentStructure(selectedXtal);
           selectedXtal->lock().unlock();
 
@@ -2881,6 +2912,9 @@ Xtal* XtalOpt::generateSuperCell(uint initialFU, uint finalFU, Xtal* parentXtal,
   return xtal;
 }
 
+// Define this macro to produce some debug info from this function
+//#define PROBS_DEBUG
+
 Xtal* XtalOpt::selectXtalFromProbabilityList(QList<Structure*> structures,
                                              uint FU)
 {
@@ -2902,53 +2936,64 @@ Xtal* XtalOpt::selectXtalFromProbabilityList(QList<Structure*> structures,
     }
   }
 
-  bool useHardness = m_useHardnessFitnessFunction;
-  // Sort structure list
-  if (useHardness)
-    Structure::sortByVickersHardness(&structures);
-  else
-    Structure::sortByEnthalpy(&structures);
+  double hardnessWeight = m_hardnessFitnessWeight;
+  if (!m_calculateHardness)
+    hardnessWeight = 0.0;
+
+  int sizeBeforeHardnessPruning = structures.size();
 
   // If we are using hardness, remove all structures with a hardness
   // less than 0
-  if (useHardness) {
+  if (hardnessWeight > 1.0e-5) {
     for (size_t i = 0; i < structures.size(); i++) {
-      if (structures[i]->vickersHardness() < 0.0) {
+      if (structures[i]->vickersHardness() < 0.0 && structures.size() > 1) {
         structures.removeAt(i);
         --i;
       }
     }
   }
 
-  // Trim list
-  // Remove all but (popSize + 1). The "+ 1" will be removed
-  // during probability generation.
-  while (static_cast<uint>(structures.size()) > popSize + 1) {
-    structures.removeLast();
+  if (structures.size() == 1 && sizeBeforeHardnessPruning > 1) {
+    warning("A nonzero hardness weight is being used for the fitness "
+            "function, but very few (if any) structures have their "
+            "hardnesses calculated. This current probability selection will "
+            "not be good.");
   }
 
-  QList<double> probs = getProbabilityList(structures, useHardness);
+  QList<QPair<GlobalSearch::Structure*, double>> probs =
+    getProbabilityList(structures, popSize, hardnessWeight);
 
-  // Cast Structures into Xtals
-  QList<Xtal*> xtals;
-#if QT_VERSION >= 0x040700
-  xtals.reserve(structures.size());
-#endif // QT_VERSION
-  for (int i = 0; i < structures.size(); ++i) {
-    xtals.append(qobject_cast<Xtal*>(structures.at(i)));
+#ifdef PROBS_DEBUG
+  std::cout << "Sorted structures list with probs is as follows:\n";
+  double previousProbs = 0.0;
+  for (const auto& elem: probs) {
+    std::cout << elem.first->getGeneration() << "x"
+              << elem.first->getIDNumber() << ": "
+              << elem.first->vickersHardness()
+              << " GPa : " << elem.first->getEnthalpyPerFU()
+              << " eV/FU : probs: " << elem.second - previousProbs
+              << " : cumulative probs: " << elem.second << "\n";
+    previousProbs = elem.second;
   }
+#endif
 
   // Initialize loop vars
-  double r;
   Xtal* xtal = nullptr;
 
   // Pick a parent
-  int ind;
-  r = getRandDouble();
-  for (ind = 0; ind < probs.size(); ind++)
-    if (r < probs.at(ind))
+  double r = getRandDouble();
+  for (const auto& elem: probs) {
+    if (r < elem.second) {
+      xtal = qobject_cast<Xtal*>(elem.first);
       break;
-  xtal = xtals.at(ind);
+    }
+  }
+
+#ifdef PROBS_DEBUG
+  std::cout << "r is " << r << "\n";
+  std::cout << "Selected crystal is " << xtal->getGeneration() << "x"
+            << xtal->getIDNumber() << "\n";
+#endif
   return xtal;
 }
 
@@ -3538,7 +3583,7 @@ void XtalOpt::interpretKeyword(QString& line, Structure* structure)
       for (int j = 0; j < 3; j++) {
         QString inp;
         inp.sprintf("%4.8f", m(i, j));
-        rep += inp + "\t";
+        rep += inp + "  ";
       }
       rep += "\n";
     }
@@ -3676,6 +3721,9 @@ std::unique_ptr<GlobalSearch::Optimizer> XtalOpt::createOptimizer(
   if (caseInsensitiveCompare(optName, "castep"))
     return make_unique<CASTEPOptimizer>(this);
 
+  if (caseInsensitiveCompare(optName, "generic"))
+    return make_unique<GenericOptimizer>(this);
+
   if (caseInsensitiveCompare(optName, "gulp"))
     return make_unique<GULPOptimizer>(this);
 
@@ -3731,10 +3779,17 @@ bool XtalOpt::load(const QString& filename, const bool forceReadOnly)
   bool stateFileIsValid =
     settings->value("xtalopt/saveSuccessful", false).toBool();
   if (!stateFileIsValid && !file.fileName().endsWith(".old")) {
-    warning("XtalOpt::load(): File " + file.fileName() +
-            " is incomplete, corrupt, or invalid. Trying " + file.fileName() +
-            ".old ...");
+    bool readFromOldState;
+    needBoolean(tr("XtalOpt::load(): File:\n\n'%1'\n\nis incomplete, corrupt, "
+                   "or invalid. Would you like to try loading:\n\n'%1"
+                   ".old'\n\ninstead?").arg(file.fileName()),
+                &readFromOldState);
+
+    if (!readFromOldState)
+      return false;
+
     return load(file.fileName() + ".old", false);
+
   } else if (!stateFileIsValid && file.fileName().endsWith(".old")) {
     error("XtalOpt::load(): File " + file.fileName() +
           " is incomplete, corrupt, or invalid. Cannot begin run. Please "
@@ -4056,6 +4111,13 @@ bool XtalOpt::load(const QString& filename, const bool forceReadOnly)
     qDebug() << "Read only? " << readOnly;
   }
 
+  // Set this up to prevent a bug if "replace with random" is the failure
+  // action and "Initialize with RandSpg" is checked.
+  if (minXtalsOfSpgPerFU.empty()) {
+    for (size_t spg = 1; spg <= 230; spg++)
+      minXtalsOfSpgPerFU.append(0);
+  }
+
   return true;
 }
 
@@ -4322,9 +4384,12 @@ void XtalOpt::checkIfSups(supCheckStruct& st)
     smallerFormulaUnitXtal = st.i;
   }
 
-  // if the larger formula unit xtal is already a supercell, skip over it.
-  if (largerFormulaUnitXtal->getStatus() == Xtal::Supercell)
+  // if the larger formula unit xtal is already a supercell or duplicate,
+  // skip over it.
+  if (largerFormulaUnitXtal->getStatus() == Xtal::Supercell ||
+      largerFormulaUnitXtal->getStatus() == Xtal::Duplicate) {
     return;
+  }
 
   // This temporary xtal will need to be deleted
   Xtal* tempXtal = generateSuperCell(smallerFormulaUnitXtal->getFormulaUnits(),
@@ -4395,50 +4460,46 @@ void XtalOpt::checkForDuplicates_()
   // Build helper structs
   QList<dupCheckStruct> dupSts;
   dupCheckStruct dupSt;
+  dupSt.tol_len = this->tol_xcLength;
+  dupSt.tol_ang = this->tol_xcAngle;
+
   QList<supCheckStruct> supSts;
   supCheckStruct supSt;
+  supSt.tol_len = this->tol_xcLength;
+  supSt.tol_ang = this->tol_xcAngle;
 
-  for (QList<Xtal*>::iterator xi = xtals.begin(); xi != xtals.end(); xi++) {
+  for (QList<Xtal*>::iterator xi = xtals.begin(); xi != xtals.end(); ++xi) {
     QReadLocker xiLocker(&(*xi)->lock());
     if ((*xi)->getStatus() != Xtal::Optimized)
       continue;
 
-    for (QList<Xtal*>::iterator xj = xi + 1; xj != xtals.end(); xj++) {
+    for (QList<Xtal*>::iterator xj = xi + 1; xj != xtals.end(); ++xj) {
       QReadLocker xjLocker(&(*xj)->lock());
-      if ((*xj)->getStatus() != Xtal::Optimized) {
+      if ((*xj)->getStatus() != Xtal::Optimized)
         continue;
-      }
+
       if (((*xi)->hasChangedSinceDupChecked() ||
            (*xj)->hasChangedSinceDupChecked()) &&
           // Perform a course enthalpy screening to cut down on number of
           // comparisons
-          fabs(((*xi)->getEnthalpy() /
-                static_cast<double>((*xi)->getFormulaUnits())) -
-               ((*xj)->getEnthalpy() /
-                static_cast<double>((*xj)->getFormulaUnits()))) < 1.0 &&
+          fabs(((*xi)->getEnthalpyPerAtom()) -
+               ((*xj)->getEnthalpyPerAtom())) < 0.1 &&
           // Screen out options that CANNOT be supercells
-
           (((*xi)->getFormulaUnits() % (*xj)->getFormulaUnits() == 0) ||
            ((*xj)->getFormulaUnits() % (*xi)->getFormulaUnits() == 0))) {
         // Append the duplicate structs list
         if ((*xi)->getFormulaUnits() == (*xj)->getFormulaUnits()) {
           dupSt.i = (*xi);
           dupSt.j = (*xj);
-          dupSt.tol_len = this->tol_xcLength;
-          dupSt.tol_ang = this->tol_xcAngle;
           dupSts.append(dupSt);
         }
         // Append the supercell structs list. One has to be a formula unit
         // multiple of the other to be a candidate supercell. In addition,
         // their formula units cannot equal.
-        else if ((((*xi)->getFormulaUnits() % (*xj)->getFormulaUnits() == 0) ||
-                  ((*xj)->getFormulaUnits() % (*xi)->getFormulaUnits() == 0)) &&
-                 ((*xj)->getFormulaUnits() != (*xi)->getFormulaUnits())) {
-
+        else if (((*xi)->getFormulaUnits() % (*xj)->getFormulaUnits() == 0) ||
+                 ((*xj)->getFormulaUnits() % (*xi)->getFormulaUnits() == 0)) {
           supSt.i = (*xi);
           supSt.j = (*xj);
-          supSt.tol_len = this->tol_xcLength;
-          supSt.tol_ang = this->tol_xcAngle;
           supSts.append(supSt);
         }
       }
@@ -4448,39 +4509,43 @@ void XtalOpt::checkForDuplicates_()
     (*xi)->setChangedSinceDupChecked(false);
   }
 
-  // If a supercell is matched as a duplicate in the checkIfDups function,
-  // it is okay because it will be overwritten with the checkIfSups function
-  // following it.
-  for (size_t i = 0; i < dupSts.size(); i++)
-    checkIfDups(dupSts[i]);
+  for (auto& dupSt : dupSts)
+    checkIfDups(dupSt);
 
   // Tried to run this concurrently. Would freeze upon resuming for some
   // reason, though...
   // QtConcurrent::blockingMap(supSts, checkIfSups);
-  for (size_t i = 0; i < supSts.size(); i++)
-    checkIfSups(supSts[i]);
+  for (auto& supSt : supSts)
+    checkIfSups(supSt);
 
   // Label supercells that primitive xtals came from as such
-  for (size_t i = 0; i < xtals.size(); i++) {
-    QReadLocker ixtalLocker(&xtals.at(i)->lock());
-    if (xtals.at(i)->skippedOptimization()) {
-      for (size_t j = 0; j < xtals.size(); j++) {
-        if (i == j)
+  for (size_t i = 0; i < xtals.size(); ++i) {
+    QReadLocker ixtalLocker(&xtals[i]->lock());
+    if (xtals[i]->skippedOptimization()) {
+      // We should only check the crystals that are ordered before this one,
+      // since a primitive reduced crystal will always have an index greater
+      // than its parent
+      for (size_t j = 0; j < i; ++j) {
+        // If the Xtal is not optimized, just continue
+        if (xtals[j]->getStatus() != Xtal::Optimized)
           continue;
-        QWriteLocker jxtalLocker(&xtals.at(j)->lock());
-        // If the xtal is optimized, a duplicate, or a supercell, overwrite
-        // the previous settings with what it should be for the primitive...
-        if ((xtals.at(i)->getStatus() == Xtal::Optimized ||
-             xtals.at(i)->getStatus() == Xtal::Duplicate ||
-             xtals.at(i)->getStatus() == Xtal::Supercell) &&
-            xtals.at(i)->getParents() ==
-              tr("Primitive of %1x%2")
-                .arg((xtals.at(j))->getGeneration())
-                .arg(xtals.at(j)->getIDNumber())) {
-          xtals.at(j)->setStatus(Xtal::Supercell);
-          xtals.at(j)->setSupercellString(QString("%1x%2")
-                                            .arg(xtals.at(i)->getGeneration())
-                                            .arg(xtals.at(i)->getIDNumber()));
+        QWriteLocker jxtalLocker(&xtals[j]->lock());
+        // Check and see if xtals[j] matches xtals[i]
+        if (xtals[i]->getParents() == tr("Primitive of %1x%2")
+            .arg((xtals[j])->getGeneration())
+            .arg(xtals[j]->getIDNumber())) {
+          xtals[j]->setStatus(Xtal::Supercell);
+          // If xtals[i] is a duplicate, set xtals[j] to be a super cell
+          // of the xtal that xtals[i] is a duplicate of
+          if (xtals[i]->getStatus() == Xtal::Duplicate)
+            xtals[j]->setSupercellString(xtals[i]->getDuplicateString());
+          else if (xtals[i]->getStatus() == Xtal::Supercell)
+            xtals[j]->setSupercellString(xtals[i]->getSupercellString());
+          else {
+            xtals[j]->setSupercellString(QString("%1x%2")
+                                         .arg(xtals.at(i)->getGeneration())
+                                         .arg(xtals.at(i)->getIDNumber()));
+          }
         }
       }
     }
@@ -4834,6 +4899,12 @@ void XtalOpt::printOptionSettings(QTextStream& stream) const
 
   stream << "  maxNumStructures: " << cutoff << "\n";
 
+  stream << "  calculateHardness: " << toString(m_calculateHardness) << "\n";
+
+  if (m_calculateHardness) {
+    stream << "  hardnessFitnessWeight: " << m_hardnessFitnessWeight << "\n";
+  }
+
   stream << "\n  usingMitoticGrowth: " << toString(using_mitotic_growth)
          << "\n";
   stream << "  usingFormulUnitCrossovers: " << toString(using_FU_crossovers)
@@ -4906,6 +4977,13 @@ void XtalOpt::printOptionSettings(QTextStream& stream) const
   stream << "\n  localQueueSettings: \n";
   stream << "  localWorkingDirectory: " << filePath << "\n";
   stream << "  logErrorDirectories: " << toString(m_logErrorDirs) << "\n";
+
+  stream << "  autoCancelJobAfterTime: " << toString(m_cancelJobAfterTime)
+         << "\n";
+  if (m_cancelJobAfterTime) {
+    stream << "  hoursForAutoCancelJob: " << m_hoursForCancelJobAfterTime
+           << "\n";
+  }
 
   stream << "\nOptimizer settings:\n";
 

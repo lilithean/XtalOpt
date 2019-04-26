@@ -422,15 +422,27 @@ void QueueManager::handleInProcessStructure_(Structure* s)
     return;
   }
 
-  switch (m_opt->queueInterface(s->getCurrentOptStep())->getStatus(s)) {
+  QueueInterface* qi = m_opt->queueInterface(s->getCurrentOptStep());
+  switch (qi->getStatus(s)) {
     case QueueInterface::Running:
     case QueueInterface::Queued:
     case QueueInterface::CommunicationError:
     case QueueInterface::Unknown:
     case QueueInterface::Pending:
     case QueueInterface::Started:
+    {
+      // Kill the structure if it has exceeded the allowable time.
+      // Only perform this for remote queues.
+      if (m_opt->cancelJobAfterTime() &&
+          s->getOptElapsedHours() > m_opt->hoursForCancelJobAfterTime() &&
+          qi->getIDString().toLower() != "local") {
+        killStructure(s);
+        emit structureUpdated(s);
+        return;
+      }
       // Nothing to do but wait
       break;
+    }
     case QueueInterface::Success:
       updateStructure(s);
       break;
@@ -625,6 +637,7 @@ void QueueManager::handleErrorStructure_(Structure* s)
         m_opt->replaceWithRandom(s, tr("excessive failures"));
         s->setStatus(Structure::Restart);
         emit structureUpdated(s);
+        return;
       case OptBase::FA_NewOffspring:
         s->setStatus(Structure::Empty);
         locker.unlock();
@@ -981,6 +994,7 @@ QueueManager::getAllOptimizedStructuresAndOneSupercellCopyForEachFormulaUnit()
           continue;
         QReadLocker s2Locker(&s2->lock());
         if (s2->getStatus() == Structure::Supercell &&
+            !s2->getSupercellString().isEmpty() &&
             s2->getSupercellString() == s->getSupercellString() &&
             s2->getFormulaUnits() == s->getFormulaUnits()) {
           break;

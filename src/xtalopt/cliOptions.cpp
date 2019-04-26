@@ -71,6 +71,8 @@ static const QStringList keywords = { "empiricalFormula",
                                       "jobFailLimit",
                                       "jobFailAction",
                                       "maxNumStructures",
+                                      "calculateHardness",
+                                      "hardnessFitnessWeight",
                                       "usingMitoticGrowth",
                                       "usingFormulaUnitCrossovers",
                                       "formulaUnitCrossoversGen",
@@ -95,6 +97,8 @@ static const QStringList keywords = { "empiricalFormula",
                                       "queueInterface",
                                       "localWorkingDirectory",
                                       "logErrorDirectories",
+                                      "autoCancelJobAfterTime",
+                                      "hoursForAutoCancelJob",
                                       "numOptimizationSteps",
                                       "host",
                                       "port",
@@ -128,7 +132,7 @@ static const QStringList requiredRemoteKeywords = { "host", "user",
                                                     "jobTemplates" };
 
 static const QStringList validOptimizers = { "gulp", "castep", "pwscf",
-                                             "siesta", "vasp" };
+                                             "siesta", "vasp" , "generic" };
 
 static const QHash<QString, QStringList> requiredOptimizerKeywords = {
   { "gulp", { "ginTemplates" } },
@@ -432,6 +436,10 @@ bool XtalOptCLIOptions::processOptions(const QHash<QString, QString>& options,
   }
 
   xtalopt.cutoff = options.value("maxNumStructures", "10000").toUInt();
+  xtalopt.m_calculateHardness =
+    toBool(options.value("calculateHardness", "false"));
+  xtalopt.m_hardnessFitnessWeight =
+    options.value("hardnessFitnessWeight", "0.5").toDouble();
   xtalopt.using_mitotic_growth =
     toBool(options.value("usingMitoticGrowth", "false"));
   xtalopt.using_FU_crossovers =
@@ -492,17 +500,17 @@ bool XtalOptCLIOptions::processOptions(const QHash<QString, QString>& options,
 
   size_t numOptSteps = options.value("numOptimizationSteps", "1").toUInt();
 
+  xtalopt.clearOptSteps();
+
   for (size_t i = 0; i < numOptSteps; ++i) {
 
     xtalopt.appendOptStep();
 
-    QString optInd = QString::number(i + 1);
-
 #ifdef ENABLE_SSH
     xtalopt.setQueueInterface(
-      i, options["queueInterface " + optInd].toLower().toStdString());
+      i, options["queueInterface"].toLower().toStdString());
 #else
-    if (options["queueInterface " + optInd].toLower() != "local") {
+    if (options["queueInterface"].toLower() != "local") {
       qDebug() << "Error: SSH is disabled, so only 'local' interface is"
                << "allowed.";
       qDebug() << "Please use the option 'queueInterface <optStep> = local'";
@@ -513,7 +521,7 @@ bool XtalOptCLIOptions::processOptions(const QHash<QString, QString>& options,
 
 #ifdef ENABLE_SSH
 
-    bool remote = (options["queueInterface " + optInd].toLower() != "local");
+    bool remote = (options["queueInterface"].toLower() != "local");
 
     // We have additional things to set if we are remote
     if (remote) {
@@ -521,42 +529,42 @@ bool XtalOptCLIOptions::processOptions(const QHash<QString, QString>& options,
       RemoteQueueInterface* remoteQueue =
         qobject_cast<RemoteQueueInterface*>(xtalopt.queueInterface(i + 1));
 
-      if (!options["submitCommand " + optInd].isEmpty())
-        remoteQueue->setSubmitCommand(options["submitCommand " + optInd]);
-      if (!options["cancelCommand " + optInd].isEmpty())
-        remoteQueue->setCancelCommand(options["cancelCommand " + optInd]);
-      if (!options["statusCommand " + optInd].isEmpty())
-        remoteQueue->setStatusCommand(options["statusCommand " + optInd]);
+      if (!options["submitCommand"].isEmpty())
+        remoteQueue->setSubmitCommand(options["submitCommand"]);
+      if (!options["cancelCommand"].isEmpty())
+        remoteQueue->setCancelCommand(options["cancelCommand"]);
+      if (!options["statusCommand"].isEmpty())
+        remoteQueue->setStatusCommand(options["statusCommand"]);
     }
 #endif
 
-    QString optimizerName = options["optimizer " + optInd].toLower();
+    QString optimizerName = options["optimizer"].toLower();
     QString queueName = xtalopt.queueInterface(i)->getIDString().toLower();
     xtalopt.setOptimizer(i, optimizerName.toStdString());
     XtalOptOptimizer* optimizer =
       static_cast<XtalOptOptimizer*>(xtalopt.optimizer(i));
     if (optimizerName == "castep") {
-      if (!addOptimizerTemplate(xtalopt, "castepCellTemplates " + optInd,
+      if (!addOptimizerTemplate(xtalopt, "castepCellTemplates",
                                 queueName, i, options)) {
         return false;
       }
 
-      if (!addOptimizerTemplate(xtalopt, "castepCellTemplates " + optInd,
+      if (!addOptimizerTemplate(xtalopt, "castepParamTemplates",
                                 queueName, i, options)) {
         return false;
       }
     } else if (options["optimizer"].toLower() == "gulp") {
-      if (!addOptimizerTemplate(xtalopt, "ginTemplates " + optInd, queueName, i,
+      if (!addOptimizerTemplate(xtalopt, "ginTemplates", queueName, i,
                                 options)) {
         return false;
       }
     } else if (options["optimizer"].toLower() == "pwscf") {
-      if (!addOptimizerTemplate(xtalopt, "pwscfTemplates " + optInd, queueName,
+      if (!addOptimizerTemplate(xtalopt, "pwscfTemplates", queueName,
                                 i, options)) {
         return false;
       }
     } else if (options["optimizer"].toLower() == "siesta") {
-      if (!addOptimizerTemplate(xtalopt, "fdfTemplates " + optInd, queueName, i,
+      if (!addOptimizerTemplate(xtalopt, "fdfTemplates", queueName, i,
                                 options)) {
         return false;
       }
@@ -576,12 +584,11 @@ bool XtalOptCLIOptions::processOptions(const QHash<QString, QString>& options,
       QVariantHash hash;
       for (const auto& symbol : symbols) {
         QString filename =
-          options["psffile " + symbol.toLower() + " " + optInd];
+          options["psffile " + symbol.toLower()];
         if (filename.isEmpty()) {
-          qDebug() << "Error: no PSF file found for atom type" << symbol
-                   << "and opt step:" << optInd;
+          qDebug() << "Error: no PSF file found for atom type" << symbol;
           qDebug() << "You must set the PSF file in the options like so:";
-          QString tmp = "psfFile " + symbol + " " + optInd +
+          QString tmp = "psfFile " + symbol +
                         " = /path/to/siesta_psfs/symbol.psf";
           qDebug() << tmp;
           return false;
@@ -602,12 +609,12 @@ bool XtalOptCLIOptions::processOptions(const QHash<QString, QString>& options,
       // Set PSF info
       optimizer->setData("PSF info", QVariant(psfInfo));
     } else if (options["optimizer"].toLower() == "vasp") {
-      if (!addOptimizerTemplate(xtalopt, "incarTemplates " + optInd, queueName,
+      if (!addOptimizerTemplate(xtalopt, "incarTemplates", queueName,
                                 i, options)) {
         return false;
       }
 
-      if (!addOptimizerTemplate(xtalopt, "kpointsTemplates " + optInd,
+      if (!addOptimizerTemplate(xtalopt, "kpointsTemplates",
                                 queueName, i, options)) {
         return false;
       }
@@ -625,23 +632,26 @@ bool XtalOptCLIOptions::processOptions(const QHash<QString, QString>& options,
       }
       qSort(symbols);
       QVariantHash hash;
+      std::string potcarStr;
       for (const auto& symbol : symbols) {
         QString filename =
-          options["potcarfile " + symbol.toLower() + " " + optInd];
+          options["potcarfile " + symbol.toLower()];
         if (filename.isEmpty()) {
-          qDebug() << "Error: no POTCAR file found for atom type" << symbol
-                   << "and opt step" << optInd;
+          qDebug() << "Error: no POTCAR file found for atom type" << symbol;
           qDebug() << "You must set the POTCAR file in the options like so:";
-          QString tmp = "potcarFile " + symbol + " " + optInd +
+          QString tmp = "potcarFile " + symbol +
                         " = /path/to/vasp_potcars/symbol/POTCAR";
           qDebug() << tmp;
           return false;
         }
 
         hash.insert(symbol, QVariant(filename));
+        potcarStr += "%fileContents:" + filename.toStdString() + "%\n";
       }
 
       potcarInfo.append(QVariant(hash));
+
+      xtalopt.setTemplate(i, "POTCAR", potcarStr);
 
       // Set composition in optimizer
       QVariantList toOpt;
@@ -660,7 +670,7 @@ bool XtalOptCLIOptions::processOptions(const QHash<QString, QString>& options,
 #ifdef ENABLE_SSH
     if (remote) {
       // We need to add the job templates if we are remote
-      if (!addOptimizerTemplate(xtalopt, "jobTemplates " + optInd, queueName, i,
+      if (!addOptimizerTemplate(xtalopt, "jobTemplates", queueName, i,
                                 options)) {
         return false;
       }
@@ -679,6 +689,14 @@ bool XtalOptCLIOptions::processOptions(const QHash<QString, QString>& options,
 
   xtalopt.m_logErrorDirs =
     toBool(options.value("logErrorDirectories", "false"));
+
+  xtalopt.m_cancelJobAfterTime =
+    toBool(options.value("autoCancelJobAfterTime", "false"));
+
+  if (xtalopt.m_cancelJobAfterTime) {
+    xtalopt.m_hoursForCancelJobAfterTime =
+      options.value("hoursForAutoCancelJob", "100.0").toDouble();
+  }
 
   if (anyRemote) {
     xtalopt.setQueueRefreshInterval(
@@ -846,7 +864,16 @@ bool XtalOptCLIOptions::addOptimizerTemplate(
   XtalOpt& xtalopt, const QString& templateName, const QString& queueName,
   size_t optStep, const QHash<QString, QString>& options)
 {
-  QString filename = options[templateName];
+  QString optStepStr = QString::number(optStep + 1);
+  QStringList fileList = options[templateName].split(",");
+
+  if (fileList.size() <= optStep) {
+    qDebug() << "Error in" << __FUNCTION__ << ": " << templateName
+             << "does not contain a template for opt step " << optStepStr;
+    return false;
+  }
+
+  QString filename = fileList[optStep].trimmed();
   if (filename.isEmpty()) {
     qDebug() << "Error in" << __FUNCTION__ << ": " << templateName
              << "is missing!";
@@ -1234,6 +1261,15 @@ void XtalOptCLIOptions::writeInitialRuntimeFile(XtalOpt& xtalopt)
 
   text +=
     QString("maxNumStructures = ") + QString::number(xtalopt.cutoff) + "\n";
+
+  text += QString("calculateHardness = ") +
+          fromBool(xtalopt.m_calculateHardness) + "\n";
+
+  if (xtalopt.m_calculateHardness) {
+    text += QString("hardnessFitnessWeight = ") +
+            QString::number(xtalopt.m_hardnessFitnessWeight) + "\n";
+  }
+
   text += QString("usingMitoticGrowth = ") +
           fromBool(xtalopt.using_mitotic_growth) + "\n";
   text += QString("usingFormulaUnitCrossovers = ") +
@@ -1281,6 +1317,15 @@ void XtalOptCLIOptions::writeInitialRuntimeFile(XtalOpt& xtalopt)
           QString::number(xtalopt.tol_xcAngle) + "\n";
   text +=
     QString("spglibTolerance = ") + QString::number(xtalopt.tol_spg) + "\n";
+
+  text += QString("\n# Queue Interface Settings\n");
+  text += QString("autoCancelJobAfterTime = ") +
+          fromBool(xtalopt.m_cancelJobAfterTime) + "\n";
+
+  if (xtalopt.m_cancelJobAfterTime) {
+    text += QString("hoursForAutoCancelJob = ") +
+            QString::number(xtalopt.m_hoursForCancelJobAfterTime) + "\n";
+  }
 
   file.write(text.toLocal8Bit().data());
 }
@@ -1405,6 +1450,10 @@ void XtalOptCLIOptions::processRuntimeOptions(
       }
     } else if (CICompare("maxNumStructures", option)) {
       xtalopt.cutoff = options[option].toUInt();
+    } else if (CICompare("calculateHardness", option)) {
+      xtalopt.m_calculateHardness = toBool(options[option]);
+    } else if (CICompare("hardnessFitnessWeight", option)) {
+      xtalopt.m_hardnessFitnessWeight = options[option].toDouble();
     } else if (CICompare("usingMitoticGrowth", option)) {
       xtalopt.using_mitotic_growth = toBool(options[option]);
     } else if (CICompare("usingFormulaUnitCrossovers", option)) {
@@ -1459,6 +1508,10 @@ void XtalOptCLIOptions::processRuntimeOptions(
       xtalopt.tol_xcAngle = options[option].toFloat();
     } else if (CICompare("spglibTolerance", option)) {
       xtalopt.tol_spg = options[option].toFloat();
+    } else if (CICompare("autoCancelJobAfterTime", option)) {
+      xtalopt.m_cancelJobAfterTime = toBool(options[option]);
+    } else if (CICompare("hoursForAutoCancelJob", option)) {
+      xtalopt.m_hoursForCancelJobAfterTime = options[option].toDouble();
     } else {
       qDebug() << "Warning: option," << option << ", is not a valid runtime"
                << "option! It is being ignored.";

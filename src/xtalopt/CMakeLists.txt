@@ -7,11 +7,12 @@ set( xtalopt_SRCS
      genetic.cpp
      structures/xtal.cpp
      optimizers/xtaloptoptimizer.cpp
-     optimizers/vasp.cpp
+     optimizers/castep.cpp
+     optimizers/generic.cpp
      optimizers/gulp.cpp
      optimizers/pwscf.cpp
-     optimizers/castep.cpp
      optimizers/siesta.cpp
+     optimizers/vasp.cpp
      rpc/xtaloptrpc.cpp
      testing/xtalopttest.cpp
      ui/dialog.cpp
@@ -74,7 +75,7 @@ add_library(xtalopt_static STATIC ${xtalopt_SRCS} ${xtalopt_RCS})
 target_link_libraries(xtalopt_static globalsearch XtalComp spglib RandSpg
                       "${QWT_LIBRARIES}")
 
-add_executable(xtalopt WIN32 MACOSX_BUNDLE main.cpp)
+add_executable(xtalopt WIN32 MACOSX_BUNDLE main.cpp ${xtalopt_RCS})
 target_link_libraries(xtalopt xtalopt_static)
 
 if(ENABLE_MOLECULAR)
@@ -126,6 +127,11 @@ if(APPLE)
   InstallCocoa("${CMAKE_INSTALL_PREFIX}/xtalopt.app/Contents/plugins"
                QT_PLUGINS)
 
+  # It appears that we need to install the style as well...
+  include(MacroInstallStyle)
+  InstallQMacStyle("${CMAKE_INSTALL_PREFIX}/xtalopt.app/Contents/plugins"
+                   QT_PLUGINS)
+
   # We need to write a qt.conf file that points to the plugins
   file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/qt.conf"
        "[Paths]\nPlugins = plugins\n")
@@ -172,7 +178,18 @@ if(INSTALL_DEPENDENCIES AND EXISTS "${ExeLocation}" AND NOT APPLE)
     install(DIRECTORY "${QtCore_location}/../plugins/platforms"
       DESTINATION bin
     )
-  endif(MSVC)
+    # If the styles directory exists, install that as well
+    if(EXISTS "${QtCore_location}/../plugins/styles")
+      install(DIRECTORY "${QtCore_location}/../plugins/styles"
+        DESTINATION bin
+      )
+    endif()
+  elseif(UNIX)
+    # For unix, install qxcb and its dependencies as well
+    include(MacroInstallPlatform)
+    InstallQXcbPlatform("${CMAKE_INSTALL_PREFIX}/bin/platforms"
+                        "${CMAKE_INSTALL_PREFIX}/lib")
+  endif()
 
   # Let's install required system libraries as well...
   include (InstallRequiredSystemLibraries)

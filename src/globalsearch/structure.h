@@ -205,6 +205,16 @@ public:
     return m_enthalpy;
   };
 
+  double getEnthalpyPerFU() const
+  {
+    return getEnthalpy() / static_cast<double>(getFormulaUnits());
+  }
+
+  double getEnthalpyPerAtom() const
+  {
+    return getEnthalpy() / static_cast<double>(numAtoms());
+  }
+
   /** Returns the value PV term from an enthalpy calculation (H = U
    * + PV) in eV.
    *
@@ -389,21 +399,32 @@ public:
    * @sa getResultsEntry
    * @sa OptBase::save
    */
-  virtual QString getResultsHeader() const
+  virtual QString getResultsHeader(bool includeHardness) const
   {
-    return QString("%1 %2 %3 %4 %5")
-      .arg("Rank", 6)
-      .arg("Gen", 6)
-      .arg("ID", 6)
-      .arg("Enthalpy", 10)
-      .arg("Status", 11);
+    if (!includeHardness) {
+      return QString("%1 %2 %3 %4 %5")
+        .arg("Rank", 6)
+        .arg("Gen", 6)
+        .arg("ID", 6)
+        .arg("Enthalpy", 10)
+        .arg("Status", 11);
+    }
+    else {
+      return QString("%1 %2 %3 %4 %5 %6")
+        .arg("Rank", 6)
+        .arg("Gen", 6)
+        .arg("ID", 6)
+        .arg("Enthalpy", 10)
+        .arg("Hardness", 10)
+        .arg("Status", 11);
+    }
   };
 
   /** @return A structure-specific entry for a results printout
    * @sa getResultsHeader
    * @sa OptBase::save
    */
-  virtual QString getResultsEntry() const;
+  virtual QString getResultsEntry(bool includeHardness) const;
 
   /** Find the smallest separation between all atoms in the
    * Structure.
@@ -631,6 +652,14 @@ public:
    * @sa stopOptTimer
    */
   QString getOptElapsed() const;
+
+  /** @return Get the amount of seconds elapsed as an int.
+   */
+  int getOptElapsedSeconds() const;
+
+  /** @return Get the amount of hours elapsed as a double.
+   */
+  double getOptElapsedHours() const;
 
   /** A "fingerprint" hash of the structure. Returns "enthalpy" key
    * with the enthalpy value as a double wrapped in a QVariant. May
@@ -1403,7 +1432,7 @@ protected:
     m_fixCount;
   QString m_parents, m_dupString, m_supString, m_rempath, m_fileName;
   double m_energy, m_enthalpy, m_PV;
-  State m_status;
+  std::atomic<State> m_status;
   QDateTime m_optStart, m_optEnd;
   int m_index;
   QList<QVariant> m_histogramDist, m_histogramFreq;

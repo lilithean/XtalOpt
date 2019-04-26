@@ -2185,7 +2185,7 @@ QHash<QString, QVariant> Xtal::getFingerprint()
   return fp;
 }
 
-QString Xtal::getResultsEntry() const
+QString Xtal::getResultsEntry(bool includeHardness) const
 {
   QString status;
   switch (getStatus()) {
@@ -2200,10 +2200,10 @@ QString Xtal::getResultsEntry() const
       status = "Killed";
       break;
     case Duplicate:
-      status = "Duplicate";
+      status = "Duplicate (" + getDuplicateString() + ")";
       break;
     case Supercell:
-      status = "Supercell";
+      status = "Supercell (" + getSupercellString() + ")";
       break;
     case Error:
       status = "Error";
@@ -2218,15 +2218,27 @@ QString Xtal::getResultsEntry() const
       status = "In progress";
       break;
   }
-  return QString("%1 %2 %3 %4 %5 %6 %7 %8")
-    .arg(getRank(), 5)
-    .arg(getGeneration(), 5)
-    .arg(getIDNumber(), 5)
-    .arg(getEnthalpy() / static_cast<double>(getFormulaUnits()), 10)
-    .arg(getFormulaUnits(), 5)
-    .arg(vickersHardness(), 10)
-    .arg(m_spgSymbol, 10)
-    .arg(status, 11);
+  if (!includeHardness) {
+    return QString("%1 %2 %3 %4 %5 %6 %7")
+      .arg(getRank(), 5)
+      .arg(getGeneration(), 5)
+      .arg(getIDNumber(), 5)
+      .arg(getEnthalpy() / static_cast<double>(getFormulaUnits()), 12)
+      .arg(getFormulaUnits(), 4)
+      .arg(m_spgSymbol, 11)
+      .arg(status, 21);
+  }
+  else {
+    return QString("%1 %2 %3 %4 %5 %6 %7 %8")
+      .arg(getRank(), 5)
+      .arg(getGeneration(), 5)
+      .arg(getIDNumber(), 5)
+      .arg(getEnthalpy() / static_cast<double>(getFormulaUnits()), 12)
+      .arg(getFormulaUnits(), 4)
+      .arg(vickersHardness(), 10)
+      .arg(m_spgSymbol, 11)
+      .arg(status, 21);
+  }
 }
 
 uint Xtal::getSpaceGroupNumber()

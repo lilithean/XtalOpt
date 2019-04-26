@@ -27,6 +27,7 @@ set( globalsearch_SRCS
      formats/obconvert.cpp
      formats/castepformat.cpp
      formats/cmlformat.cpp
+     formats/genericformat.cpp
      formats/gulpformat.cpp
      formats/poscarformat.cpp
      formats/pwscfformat.cpp
@@ -81,6 +82,7 @@ set( globalsearch_SRCS
      queueinterfaces/sgedialog.cpp
      queueinterfaces/slurm.cpp
      queueinterfaces/slurmdialog.cpp
+     queueinterfaces/globalqueueinterfacesettingswidget.cpp
 )
 endif()
 

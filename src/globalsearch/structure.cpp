@@ -129,7 +129,7 @@ Structure& Structure::operator=(const Structure& other)
     m_energy = other.m_energy;
     m_enthalpy = other.m_enthalpy;
     m_PV = other.m_PV;
-    m_status = other.m_status;
+    m_status = other.m_status.load();
     m_optStart = other.m_optStart;
     m_optEnd = other.m_optEnd;
     m_index = other.m_index;
@@ -173,7 +173,7 @@ Structure& Structure::operator=(Structure&& other) noexcept
     m_energy = std::move(other.m_energy);
     m_enthalpy = std::move(other.m_enthalpy);
     m_PV = std::move(other.m_PV);
-    m_status = std::move(other.m_status);
+    m_status = std::move(other.m_status.load());
     m_optStart = std::move(other.m_optStart);
     m_optEnd = std::move(other.m_optEnd);
     m_index = std::move(other.m_index);
@@ -800,7 +800,7 @@ bool Structure::addAtomRandomly(uint atomicNumber, double minIAD, double maxIAD,
   return true;
 }
 
-QString Structure::getResultsEntry() const
+QString Structure::getResultsEntry(bool includeHardness) const
 {
   QString status;
   switch (getStatus()) {
@@ -833,12 +833,23 @@ QString Structure::getResultsEntry() const
       status = "In progress";
       break;
   }
-  return QString("%1 %2 %3 %4 %5")
-    .arg(getRank(), 6)
-    .arg(getGeneration(), 6)
-    .arg(getIDNumber(), 6)
-    .arg(getEnthalpy(), 10)
-    .arg(status, 11);
+  if (!includeHardness) {
+    return QString("%1 %2 %3 %4 %5")
+      .arg(getRank(), 6)
+      .arg(getGeneration(), 6)
+      .arg(getIDNumber(), 6)
+      .arg(getEnthalpy(), 10)
+      .arg(status, 11);
+  }
+  else {
+    return QString("%1 %2 %3 %4 %5 %6")
+      .arg(getRank(), 6)
+      .arg(getGeneration(), 6)
+      .arg(getIDNumber(), 6)
+      .arg(getEnthalpy(), 10)
+      .arg(vickersHardness(), 10)
+      .arg(status, 11);
+  }
 }
 
 bool Structure::getNearestNeighborDistances(QList<double>* list) const
@@ -1305,19 +1316,28 @@ QList<Vector3> Structure::getAtomCoordsFrac() const
 
 QString Structure::getOptElapsed() const
 {
-  int secs;
-  if (m_optStart.toString() == "")
-    return "0:00:00";
-  if (m_optEnd.toString() == "")
-    secs = m_optStart.secsTo(QDateTime::currentDateTime());
-  else
-    secs = m_optStart.secsTo(m_optEnd);
+  int secs = getOptElapsedSeconds();
   int hours = static_cast<int>(secs / 3600);
   int mins = static_cast<int>((secs - hours * 3600) / 60);
   secs = secs % 60;
   QString ret;
   ret.sprintf("%d:%02d:%02d", hours, mins, secs);
   return ret;
+}
+
+int Structure::getOptElapsedSeconds() const
+{
+  if (m_optStart.toString() == "")
+    return 0;
+  if (m_optEnd.toString() == "")
+    return m_optStart.secsTo(QDateTime::currentDateTime());
+
+  return m_optStart.secsTo(m_optEnd);
+}
+
+double Structure::getOptElapsedHours() const
+{
+  return getOptElapsedSeconds() / 3600.0;
 }
 
 void Structure::load(QTextStream& in)

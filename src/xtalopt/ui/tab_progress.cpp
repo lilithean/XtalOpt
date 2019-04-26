@@ -48,7 +48,9 @@ namespace XtalOpt {
 
 TabProgress::TabProgress(GlobalSearch::AbstractDialog* parent, XtalOpt* p)
   : AbstractTab(parent, p), m_ui_xrdOptionsDialog(new Ui::XrdOptionsDialog),
-    m_xrdOptionsDialog(new QDialog(parent)), m_xrdPlot(new XrdPlot),
+    m_xrdOptionsDialog(new QDialog(parent)),
+    m_xrdPlotDialog(new QDialog(parent)),
+    m_xrdPlot(new XrdPlot(m_xrdPlotDialog)),
     m_timer(new QTimer(this)), m_mutex(new QMutex), m_update_mutex(new QMutex),
     m_update_all_mutex(new QMutex), m_context_mutex(new QMutex),
     m_context_xtal(0)
@@ -105,6 +107,7 @@ TabProgress::~TabProgress()
   delete m_ui_xrdOptionsDialog;
   delete m_xrdOptionsDialog;
   delete m_xrdPlot;
+  delete m_xrdPlotDialog; // This needs to go after m_xrdPlot
   delete m_mutex;
   delete m_update_mutex;
   delete m_update_all_mutex;
@@ -561,7 +564,7 @@ void TabProgress::progressContextMenu(QPoint p)
   menu.addSeparator();
   QAction* a_clipPOSCAR = menu.addAction("&Copy POSCAR to clipboard");
   menu.addSeparator();
-  QAction* a_plotXrd = menu.addAction("Plot Theoretical XRD Pattern");
+  QAction* a_plotXrd = menu.addAction("Plot Simulated XRD Pattern");
 
   // Connect actions
   connect(a_restart, SIGNAL(triggered()), this, SLOT(restartJobProgress()));
@@ -769,7 +772,7 @@ void TabProgress::randomizeStructureProgress_()
 
   // Restart job:
   newInfoUpdate(m_context_xtal);
-  restartJobProgress_(1);
+  restartJobProgress_(0);
   // above function handles background processing signal
 }
 
@@ -900,20 +903,17 @@ void TabProgress::plotXrdProgress()
     return;
   }
 
-  if (m_xrdPlot->isVisible())
-    m_xrdPlot->hide();
+  if (m_xrdPlotDialog->isVisible())
+    m_xrdPlotDialog->hide();
 
   m_xrdPlot->clearPlotCurves();
   m_xrdPlot->addXrdData(results);
+  m_xrdPlotDialog->resize(600, 600);
   m_xrdPlot->resize(600, 600);
   m_xrdPlot->setAxisAutoScale(QwtPlot::yLeft);
   m_xrdPlot->setAxisAutoScale(QwtPlot::xBottom);
   m_xrdPlot->replot();
-
-  // Center the plot on the desktop screen
-  m_xrdPlot->move(QApplication::desktop()->screen()->rect().center() -
-                  m_xrdPlot->rect().center());
-  m_xrdPlot->show();
+  m_xrdPlotDialog->show();
 
   // Clear context xtal pointer
   m_context_xtal = 0;
